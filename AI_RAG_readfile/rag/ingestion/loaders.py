@@ -98,12 +98,19 @@ def load_document(file_path: str):
         from pypdf import PdfReader
         import pdfplumber
         import io
+        import hashlib
         from PIL import Image
+        import concurrent.futures
         
         docs = []
         
         with pdfplumber.open(file_path) as pdf_plumb:
             reader = PdfReader(file_path)
+            
+            # Lưu trữ dữ liệu thô và tất cả hình ảnh để xử lý song song
+            pages_content = []
+            all_tasks = []
+            image_cache = {} # Dict lưu: hash_ảnh -> chuỗi_kết_quả_phân_tích
             
             for i, page_pypdf in enumerate(reader.pages):
                 page_plumb = pdf_plumb.pages[i]
@@ -124,25 +131,66 @@ def load_document(file_path: str):
                         table_texts.append(f"\n[Bảng dữ liệu]:\n{table_str}\n")
                     text += "\n" + "\n".join(table_texts)
                 
-                # 2. Trích xuất hình ảnh có trong trang bằng pypdf
-                image_analyses = []
+                # 2. Thu thập TẤT CẢ hình ảnh có trong trang bằng pypdf
+                page_images = []
                 for image_file_object in page_pypdf.images:
                     try:
-                        img = Image.open(io.BytesIO(image_file_object.data))
-                        # Đưa qua Groq để đọc ảnh/biểu đồ
-                        img_analysis = analyze_image_with_groq(img)
-                        if img_analysis:
-                            image_analyses.append(f"[Hình ảnh/Biểu đồ: {img_analysis}]")
+                        img_data = image_file_object.data
+                        img_hash = hashlib.md5(img_data).hexdigest()
+                        
+                        img = Image.open(io.BytesIO(img_data))
+                        page_images.append({
+                            "img": img,
+                            "hash": img_hash
+                        })
                     except Exception as e:
                         print(f"Lỗi khi trích xuất ảnh ở trang {i}: {e}")
                 
-                # Nối phần mô tả ảnh vào nội dung trang
+                pages_content.append({
+                    "page_num": i,
+                    "text": text,
+                    "images": page_images
+                })
+                
+                # Đưa vào danh sách task xử lý chung
+                for item in page_images:
+                    all_tasks.append(item)
+                    
+            # Bước 2: Xử lý TẤT CẢ ảnh song song bằng ThreadPoolExecutor
+            if all_tasks:
+                # Lọc ra các ảnh unique (chưa có trong cache)
+                unique_tasks = {}
+                for task in all_tasks:
+                    if task["hash"] not in unique_tasks:
+                        unique_tasks[task["hash"]] = task["img"]
+                
+                with concurrent.futures.ThreadPoolExecutor(max_workers=10) as executor:
+                    future_to_hash = {executor.submit(analyze_image_with_groq, img): h for h, img in unique_tasks.items()}
+                    for future in concurrent.futures.as_completed(future_to_hash):
+                        h = future_to_hash[future]
+                        try:
+                            res = future.result()
+                            if res:
+                                image_cache[h] = f"[Hình ảnh/Biểu đồ: {res}]"
+                        except Exception as e:
+                            print(f"Lỗi phân tích ảnh song song: {e}")
+                            
+            # Bước 3: Ráp lại nội dung trang
+            for page_data in pages_content:
+                text = page_data["text"]
+                i = page_data["page_num"]
+                
+                image_analyses = []
+                for item in page_data["images"]:
+                    if item["hash"] in image_cache:
+                        image_analyses.append(image_cache[item["hash"]])
+                
                 if image_analyses:
                     if text.strip():
                         text += "\n\n"
                     text += "\n\n".join(image_analyses)
                     
-                # 3. Dự phòng (Fallback): Nếu trang trống trơn
+                # Dự phòng (Fallback): Nếu trang trống trơn
                 if not text.strip():
                     try:
                         from pdf2image import convert_from_path
@@ -161,24 +209,32 @@ def load_document(file_path: str):
         import docx2txt
         import tempfile
         import os
+        import concurrent.futures
         
         with tempfile.TemporaryDirectory() as tmpdir:
             text = docx2txt.process(file_path, tmpdir)
             if not text:
                 text = ""
                 
+            images_to_process = []
             for img_file in os.listdir(tmpdir):
                 if img_file.lower().endswith(('.png', '.jpg', '.jpeg')):
                     img_path = os.path.join(tmpdir, img_file)
-                    try:
-                        # Phân tích ảnh/biểu đồ đính kèm trong Word
-                        img_text = analyze_image_with_groq(img_path)
-                        if text:
-                            text += f"\n[Hình ảnh/Biểu đồ: {img_text}]\n"
-                        else:
-                            text = img_text
-                    except Exception:
-                        pass
+                    images_to_process.append(img_path)
+                    
+            if images_to_process:
+                with concurrent.futures.ThreadPoolExecutor(max_workers=10) as executor:
+                    futures = [executor.submit(analyze_image_with_groq, img_path) for img_path in images_to_process]
+                    for future in concurrent.futures.as_completed(futures):
+                        try:
+                            res = future.result()
+                            if res:
+                                if text:
+                                    text += f"\n[Hình ảnh/Biểu đồ: {res}]\n"
+                                else:
+                                    text = res
+                        except Exception:
+                            pass
         
         return [Document(page_content=text, metadata={"source": file_path, "type": "docx"})]
     else:
