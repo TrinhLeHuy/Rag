@@ -1,0 +1,104 @@
+@page "/crawler"
+@using RagFrontend.Services
+@inject CrawlerService CrawlService
+
+<h3>Ra Lệnh Bot Đọc Website (Data Ingestion)</h3>
+
+<div class="card p-3 shadow-sm mt-4">
+    <div class="mb-3">
+        <label class="form-label fw-bold">Nhập đường dẫn trang web cần học:</label>
+        <input type="text" class="form-control" @bind="targetUrl" />
+        <small class="text-muted">Hệ thống sẽ tự động vào link này, lọc quảng cáo, đọc nội dung và lưu lên Cloud Vector Database (Pinecone).</small>
+    </div>
+
+    <button class="btn btn-primary" @onclick="StartCrawling" disabled="@isCrawling">
+        @if (isCrawling)
+        {
+            <span class="spinner-border spinner-border-sm" role="status" aria-hidden="true"></span>
+            <span> Đang phân tích và xử lý Semantic Chunking...</span>
+        }
+        else
+        {
+            <span>Bắt Đầu Cào Dữ Liệu</span>
+        }
+    </button>
+
+    @if (!string.IsNullOrEmpty(statusMessage))
+    {
+        <div class="alert @(isCrawling ? "alert-info" : isError ? "alert-danger" : "alert-success") mt-3">
+            @statusMessage
+        </div>
+    }
+</div>
+
+@code {
+    private string targetUrl = "https://ttcagris.com.vn/media/sustainability-report/Bao_cao_PTBV_2425.pdf";
+    private string statusMessage = "";
+    private bool isError = false;
+    private bool isCrawling = false;
+
+    private async Task StartCrawling()
+    {
+        if (string.IsNullOrWhiteSpace(targetUrl))
+        {
+            statusMessage = "Vui lòng nhập đường link!";
+            isError = false;
+            return;
+        }
+
+        isCrawling = true;
+        isError = false;
+        statusMessage = "Đang gửi yêu cầu crawl...";
+        StateHasChanged();
+
+        try
+        {
+            // Bước 1: Gửi yêu cầu crawl, nhận job_id
+            var jobId = await CrawlService.StartCrawlAsync(targetUrl);
+            statusMessage = $"✅ Đã tạo job #{jobId}. Đang xử lý...";
+            StateHasChanged();
+
+            // Bước 2: Poll trạng thái cho tới khi hoàn tất
+            while (true)
+            {
+                await Task.Delay(2000); // Chờ 2 giây giữa mỗi lần poll
+
+                var status = await CrawlService.GetStatusAsync(jobId);
+
+                if (status.Status == "success")
+                {
+                    statusMessage = $"🎉 Hoàn tất! {status.Message}";
+                    isError = false;
+                    break;
+                }
+                else if (status.Status == "failed")
+                {
+                    statusMessage = $"❌ Thất bại: {status.Message}";
+                    isError = true;
+                    break;
+                }
+                else
+                {
+                    // queued hoặc processing
+                    statusMessage = $"⏳ Job #{jobId}: {status.Status} - {status.Message}";
+                    StateHasChanged();
+                }
+            }
+        }
+        catch (HttpRequestException ex)
+        {
+            isError = true;
+            statusMessage = $"🔌 Không kết nối được tới server: {ex.Message}";
+        }
+        catch (Exception ex)
+        {
+            isError = true;
+            statusMessage = $"❌ Lỗi không xác định: {ex.Message}";
+        }
+        finally
+        {
+            isCrawling = false;
+            StateHasChanged();
+        }
+    }
+}

@@ -1,0 +1,150 @@
+@page "/chat"
+@page "/chat/{SessionId}"
+@using RagFrontend.Services
+@inject ChatService ChatService
+@inject AuthService AuthService
+@inject NavigationManager NavManager
+
+<h3>Chat AI</h3>
+
+<!-- Khu vực hiển thị trạng thái đăng nhập -->
+@if (!AuthService.IsLoggedIn)
+{
+    <div class="alert alert-warning mb-3" style="margin-top: -10px;">
+        Bạn đang dùng ẩn danh. Lịch sử chat sẽ không được lưu. 
+        <a href="/auth">Đăng nhập</a> để lưu lịch sử!
+    </div>
+}
+else
+{
+    <div class="alert alert-success mb-3" style="margin-top: -10px;">
+        Đang trò chuyện dưới tên: <strong>@AuthService.CurrentUsername</strong>
+    </div>
+}
+
+<!-- Khu vực hiển thị tin nhắn -->
+<div class="chat-box" style="height: 400px; overflow-y: scroll; border: 1px solid #ccc; padding: 10px; margin-bottom: 10px;">
+    @if (chatHistory.Count == 0)
+    {
+        <div class="text-center text-muted" style="margin-top: 150px;">
+            Hãy bắt đầu cuộc trò chuyện!
+        </div>
+    }
+    @foreach (var msg in chatHistory)
+    {
+        if (msg.IsUser)
+        {
+            <div style="text-align: right; color: blue; margin-bottom: 10px;">
+                <strong>Bạn:</strong> @msg.Text
+            </div>
+        }
+        else
+        {
+            <div style="text-align: left; color: green; margin-bottom: 10px; white-space: pre-wrap;">
+                <strong>AI:</strong> @msg.Text
+                @if (msg.Sources != null && msg.Sources.Any())
+                {
+                    <br/><small style="color: gray; white-space: normal;">Nguồn: @string.Join(", ", msg.Sources)</small>
+                }
+            </div>
+        }
+    }
+</div>
+
+<!-- Khu vực nhập câu hỏi -->
+<div class="input-group">
+    <input type="text" class="form-control" @bind="userInput" @bind:event="oninput" @onkeyup="HandleKeyUp" placeholder="Nhập câu hỏi của bạn..." />
+    <button class="btn btn-success" @onclick="SendMessage" disabled="@isWaiting">Gửi</button>
+</div>
+
+@code {
+    [Parameter]
+    public string? SessionId { get; set; }
+
+    private string userInput = "";
+    private bool isWaiting = false;
+    
+    // Các biến cho Chat
+    private List<ChatMessage> chatHistory = new List<ChatMessage>();
+
+
+    protected override async Task OnParametersSetAsync()
+    {
+        // Hàm này chạy mỗi khi URL thay đổi (VD: bấm sang tab chat khác trên NavMenu)
+        if (string.IsNullOrEmpty(SessionId))
+        {
+            // Trạng thái /chat (Tạo chat mới)
+            chatHistory.Clear();
+        }
+        else
+        {
+            // Load lịch sử của SessionId
+            await LoadChatHistory();
+        }
+    }
+
+    private async Task LoadChatHistory()
+    {
+        if (AuthService.IsLoggedIn && !string.IsNullOrEmpty(SessionId))
+        {
+            var history = await ChatService.GetHistoryAsync(SessionId);
+            chatHistory.Clear();
+            foreach (var item in history)
+            {
+                chatHistory.Add(new ChatMessage { Text = item.UserMessage, IsUser = true });
+                chatHistory.Add(new ChatMessage { Text = item.AiResponse, IsUser = false });
+            }
+        }
+    }
+
+
+    private async Task SendMessage()
+    {
+        if (string.IsNullOrWhiteSpace(userInput)) return;
+
+        string currentQuery = userInput;
+        chatHistory.Add(new ChatMessage { Text = currentQuery, IsUser = true });
+        userInput = ""; 
+        isWaiting = true;
+
+        // Nếu đang ở /chat (SessionId rỗng), tạo GUID mới
+        string currentSessionId = string.IsNullOrEmpty(SessionId) ? Guid.NewGuid().ToString() : SessionId;
+        string username = AuthService.IsLoggedIn && !string.IsNullOrEmpty(AuthService.CurrentUsername) ? AuthService.CurrentUsername : "guest";
+        
+        var response = await ChatService.SendMessageAsync(currentQuery, currentSessionId, username);
+
+        chatHistory.Add(new ChatMessage 
+        { 
+            Text = response.Answer, 
+            IsUser = false,
+            Sources = response.Sources
+        });
+        
+        isWaiting = false;
+
+        // Nếu đây là tin nhắn đầu tiên của đoạn chat mới
+        if (string.IsNullOrEmpty(SessionId))
+        {
+            // Báo cho NavMenu biết để load lại danh sách bên trái
+            ChatService.NotifyStateChanged();
+            
+            // Chuyển hướng URL sang /chat/{currentSessionId}
+            NavManager.NavigateTo($"/chat/{currentSessionId}");
+        }
+    }
+
+    private async Task HandleKeyUp(KeyboardEventArgs e)
+    {
+        if (e.Key == "Enter")
+        {
+            await SendMessage();
+        }
+    }
+
+    public class ChatMessage
+    {
+        public string Text { get; set; } = string.Empty;
+        public bool IsUser { get; set; }
+        public List<string> Sources { get; set; } = new();
+    }
+}

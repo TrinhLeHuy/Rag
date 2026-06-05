@@ -1,0 +1,61 @@
+@page "/auth"
+@using RagFrontend.Services
+@inject AuthService AuthService
+
+<h3>Đăng Nhập / Đăng Ký</h3>
+
+<div class="card p-3" style="max-width: 400px;">
+    @if (AuthService.IsLoggedIn)
+    {
+        <div class="alert alert-success">
+            Xin chào, <strong>@AuthService.CurrentUsername</strong>!
+        </div>
+        <button class="btn btn-danger" @onclick="Logout">Đăng Xuất</button>
+    }
+    else
+    {
+        <div class="mb-3">
+            <label>Tên đăng nhập:</label>
+            <input type="text" class="form-control" @bind="username" />
+        </div>
+        <div class="mb-3">
+            <label>Mật khẩu:</label>
+            <input type="password" class="form-control" @bind="password" />
+        </div>
+
+        <div>
+            <button class="btn btn-primary me-2" @onclick="Login">Đăng Nhập</button>
+            <button class="btn btn-secondary" @onclick="Register">Đăng Ký</button>
+        </div>
+
+        @if (!string.IsNullOrEmpty(statusMessage))
+        {
+            <div class="alert alert-info mt-3">@statusMessage</div>
+        }
+    }
+</div>
+
+@code {
+    private string username = "";
+    private string password = "";
+    private string statusMessage = "";
+
+    private async Task Login()
+    {
+        if (await AuthService.LoginAsync(username, password))
+            statusMessage = "Đăng nhập thành công!";
+        else
+            statusMessage = "Sai tên đăng nhập hoặc mật khẩu.";
+    }
+
+    private async Task Register()
+    {
+        statusMessage = await AuthService.RegisterAsync(username, password);
+    }
+
+    private void Logout()
+    {
+        AuthService.Logout();
+        statusMessage = "Đã đăng xuất.";
+    }
+}

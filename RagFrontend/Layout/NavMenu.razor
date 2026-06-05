@@ -1,0 +1,131 @@
+@using RagFrontend.Services
+@inject ChatService ChatService
+@inject AuthService AuthService
+@inject NavigationManager NavManager
+@implements IDisposable
+
+<div class="top-row ps-3 navbar navbar-dark">
+    <div class="container-fluid">
+        <a class="navbar-brand" href="">RagFrontend</a>
+        <button title="Navigation menu" class="navbar-toggler" @onclick="ToggleNavMenu">
+            <span class="navbar-toggler-icon"></span>
+        </button>
+    </div>
+</div>
+
+<div class="@NavMenuCssClass nav-scrollable" @onclick="ToggleNavMenu">
+    <nav class="nav flex-column h-100">
+        <div class="nav-item px-3">
+            <NavLink class="nav-link" href="" Match="NavLinkMatch.All">
+                <span class="bi bi-house-door-fill-nav-menu" aria-hidden="true"></span> Home
+            </NavLink>
+        </div>
+        <div class="nav-item px-3">
+            <NavLink class="nav-link" href="crawler">
+                <span class="bi bi-globe" aria-hidden="true"></span> Đọc Website
+            </NavLink>
+        </div>
+        <div class="nav-item px-3">
+            <NavLink class="nav-link" href="chat" Match="NavLinkMatch.All">
+                <span class="bi bi-chat-dots-fill" aria-hidden="true"></span> + Tạo Chat Mới
+            </NavLink>
+        </div>
+        
+        <!-- Render Chat Sessions if Logged In -->
+        @if (AuthService.IsLoggedIn && sessions != null && sessions.Count > 0)
+        {
+            <div class="px-3" style="font-size: 0.9em; margin-bottom: 10px;">
+                @foreach (var session in sessions)
+                {
+                    <div class="nav-item mt-1 d-flex justify-content-between align-items-center" style="background-color: rgba(255,255,255,0.1); border-radius: 5px; overflow: hidden;">
+                        <NavLink class="nav-link d-flex align-items-center" href="@($"chat/{session.SessionId}")" style="padding: 0.5rem; color: white; min-width: 0; flex-grow: 1;">
+                            <span class="bi bi-chat-text flex-shrink-0" aria-hidden="true" style="margin-right: 5px;"></span>
+                            <span class="text-truncate" title="@session.Title">@(string.IsNullOrEmpty(session.Title) ? "Đoạn chat mới" : session.Title)</span>
+                        </NavLink>
+                        <button class="btn btn-sm text-danger flex-shrink-0" style="padding: 0 8px;" @onclick="() => DeleteSession(session.SessionId)" @onclick:stopPropagation="true">
+                            &times;
+                        </button>
+                    </div>
+                }
+                
+                <div class="nav-item mt-2">
+                    <button class="btn btn-outline-danger w-100 btn-sm" @onclick="DeleteAllSessions">
+                        <span class="bi bi-trash-fill" aria-hidden="true"></span> Xóa Toàn Bộ Lịch Sử
+                    </button>
+                </div>
+            </div>
+        }
+
+        <div class="nav-item px-3 mt-auto" style="padding-bottom: 1rem;">
+            <NavLink class="nav-link" href="auth">
+                <span class="bi bi-person-fill" aria-hidden="true"></span> Đăng Nhập
+            </NavLink>
+        </div>
+    </nav>
+</div>
+
+@code {
+    private bool collapseNavMenu = true;
+    private List<ChatSessionResponse> sessions = new List<ChatSessionResponse>();
+
+    private string? NavMenuCssClass => collapseNavMenu ? "collapse" : null;
+
+    private void ToggleNavMenu()
+    {
+        collapseNavMenu = !collapseNavMenu;
+    }
+
+    protected override async Task OnInitializedAsync()
+    {
+        ChatService.OnChange += () => InvokeAsync(LoadSessions);
+        
+        if (AuthService.IsLoggedIn)
+        {
+            await LoadSessions();
+        }
+    }
+
+    private async Task LoadSessions()
+    {
+        if (AuthService.IsLoggedIn && !string.IsNullOrEmpty(AuthService.CurrentUsername))
+        {
+            sessions = await ChatService.GetSessionsAsync(AuthService.CurrentUsername);
+            await InvokeAsync(StateHasChanged);
+        }
+    }
+
+    private async Task DeleteSession(string sessionId)
+    {
+        if (AuthService.IsLoggedIn)
+        {
+            bool success = await ChatService.DeleteHistoryAsync(sessionId);
+            if (success)
+            {
+                await LoadSessions();
+                
+                if (NavManager.Uri.EndsWith(sessionId))
+                {
+                    NavManager.NavigateTo("/chat");
+                }
+            }
+        }
+    }
+
+    private async Task DeleteAllSessions()
+    {
+        if (AuthService.IsLoggedIn)
+        {
+            bool success = await ChatService.DeleteAllHistoryAsync(AuthService.CurrentUsername);
+            if (success)
+            {
+                await LoadSessions();
+                NavManager.NavigateTo("/chat");
+            }
+        }
+    }
+
+    public void Dispose()
+    {
+        // For simplicity in this tutorial, we omit complex unsubscription.
+    }
+}
